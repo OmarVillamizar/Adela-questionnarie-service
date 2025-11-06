@@ -36,71 +36,89 @@ public class JwtFilter extends OncePerRequestFilter {
         try {
             if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
                 token = authorizationHeader.substring(7);
-                email = jwtUtil.extractEmail(token);
-            }
-
-            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                if (jwtUtil.validateToken(token)) {
-
-                    Map<String, Object> user = jwtUtil.extractUserInfo(token);
-                    List<SimpleGrantedAuthority> permisos = new LinkedList<>();
-
-                    // ✅ LEER ESTRUCTURA COMO MS-AUTH
-                    String estado = (String) user.get("estado");
+                
+                try {
+                    email = jwtUtil.extractEmail(token);
                     
-                    // Determinar si es profesor basado en la presencia de estadoProfesor
-                    if (user.containsKey("estadoProfesor")) {
-                        // Es un profesor
-                        String estadoProfesor = (String) user.get("estadoProfesor");
-                        Map<String, Object> rol = (Map<String, Object>) user.get("rol");
+                    if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                        if (jwtUtil.validateToken(token)) {
 
-                        if ("ACTIVA".equals(estado) && "ACTIVA".equals(estadoProfesor) && rol != null) {
-                            String rolDescripcion = (String) rol.get("descripcion");
-                            permisos.add(new SimpleGrantedAuthority("ROLE_" + rolDescripcion));
-                        }
-                        if ("INCOMPLETA".equals(estado)) {
-                            permisos.add(new SimpleGrantedAuthority("ROLE_PROFESOR_INCOMPLETO"));
-                        }
-                        if ("INACTIVA".equals(estadoProfesor)) {
-                            permisos.add(new SimpleGrantedAuthority("ROLE_PROFESOR_INACTIVO"));
-                        }
+                            Map<String, Object> user = jwtUtil.extractUserInfo(token);
+                            List<SimpleGrantedAuthority> permisos = new LinkedList<>();
 
-                    } else {
-                        // Es un estudiante
-                        if ("ACTIVA".equals(estado)) {
-                            permisos.add(new SimpleGrantedAuthority("ROLE_ESTUDIANTE"));
-                        }
-                        if ("INCOMPLETA".equals(estado)) {
-                            permisos.add(new SimpleGrantedAuthority("ROLE_ESTUDIANTE_INCOMPLETO"));
+                            String estado = (String) user.get("estado");
+                            
+                            // Determinar si es profesor basado en la presencia de estadoProfesor
+                            if (user.containsKey("estadoProfesor")) {
+                                // Es un profesor
+                                String estadoProfesor = (String) user.get("estadoProfesor");
+                                Map<String, Object> rol = (Map<String, Object>) user.get("rol");
+
+                                if ("ACTIVA".equals(estado) && "ACTIVA".equals(estadoProfesor) && rol != null) {
+                                    String rolDescripcion = (String) rol.get("descripcion");
+                                    permisos.add(new SimpleGrantedAuthority("ROLE_" + rolDescripcion));
+                                }
+                                if ("INCOMPLETA".equals(estado)) {
+                                    permisos.add(new SimpleGrantedAuthority("ROLE_PROFESOR_INCOMPLETO"));
+                                }
+                                if ("INACTIVA".equals(estadoProfesor)) {
+                                    permisos.add(new SimpleGrantedAuthority("ROLE_PROFESOR_INACTIVO"));
+                                }
+
+                            } else {
+                                // Es un estudiante
+                                if ("ACTIVA".equals(estado)) {
+                                    permisos.add(new SimpleGrantedAuthority("ROLE_ESTUDIANTE"));
+                                }
+                                if ("INCOMPLETA".equals(estado)) {
+                                    permisos.add(new SimpleGrantedAuthority("ROLE_ESTUDIANTE_INCOMPLETO"));
+                                }
+                            }
+
+                            System.out.println("✅ JWT procesado correctamente para " + email);
+                            System.out.println("🔹 Permisos asignados: " + permisos);
+
+                            UsernamePasswordAuthenticationToken authenticationToken =
+                                    new UsernamePasswordAuthenticationToken(email, null, permisos);
+
+                            authenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                            SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+                        } else {
+                            System.out.println("⚠️ Token no válido para: " + email);
                         }
                     }
-
-                    System.out.println("✅ JWT procesado correctamente para " + email);
-                    System.out.println("🔹 Permisos: " + permisos);
-
-                    UsernamePasswordAuthenticationToken authenticationToken =
-                            new UsernamePasswordAuthenticationToken(email, null, permisos);
-
-                    authenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+                    
+                } catch (SignatureException e) {
+                    System.out.println("❌ Token JWT inválido - Firma incorrecta");
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\":\"Invalid JWT signature\"}");
+                    return; // IMPORTANTE: retornar sin llamar filterChain
+                    
+                } catch (ExpiredJwtException e) {
+                    System.out.println("❌ Token JWT expirado");
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\":\"JWT token expired\"}");
+                    return; // IMPORTANTE: retornar sin llamar filterChain
+                    
+                } catch (Exception e) {
+                    System.out.println("❌ Error procesando JWT: " + e.getMessage());
+                    e.printStackTrace();
+                    // NO retornamos aquí - dejamos que continúe sin autenticación
                 }
+            } else {
+                System.out.println("⚠️ No se encontró header Authorization o no es Bearer token");
             }
 
+            // ✅ CRÍTICO: Siempre continuar la cadena de filtros
             filterChain.doFilter(request, response);
 
-        } catch (SignatureException e) {
-            System.out.println("❌ Token JWT inválido");
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.getWriter().write("Invalid JWT token");
-        } catch (ExpiredJwtException e) {
-            System.out.println("❌ Token JWT expirado");
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.getWriter().write(e.getMessage());
         } catch (Exception e) {
-            System.out.println("❌ Error procesando JWT: " + e.getMessage());
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            System.out.println("❌ Error crítico en JwtFilter: " + e.getMessage());
             e.printStackTrace();
-            response.getWriter().write("Error in JWT token filter: " + e.getMessage());
+            // Incluso en error crítico, intentamos continuar
+            filterChain.doFilter(request, response);
         }
     }
 }
